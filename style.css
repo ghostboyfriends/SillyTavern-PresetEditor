@@ -9,9 +9,12 @@
 
 #pe-modal, #pe-modal * { box-sizing: border-box; }
 /* 承载本编辑器的酒馆原生弹窗：去掉内边距，让面板铺满；隐藏原生标题/×，用我们自己的头部 */
-.pe-host .popup-content { padding: 0 !important; margin: 0 !important; display: block !important; }
+/* 承载本编辑器的酒馆原生弹窗：去掉内边距/居中，让面板铺满并左对齐 */
+.pe-host { width: min(1120px, 94vw) !important; max-width: min(1120px, 94vw) !important; }
+.pe-host .popup-content { padding: 0 !important; margin: 0 !important; display: block !important; text-align: left !important; }
 .pe-host .popup-body { padding: 0 !important; }
 .pe-host .popup-button-close { display: none !important; }
+#pe-modal { text-align: left; }
 
 /* ---------- 字体 / 圆角常量 ---------- */
 #pe-modal {

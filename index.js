@@ -382,6 +382,8 @@ function openEditor() {
     // 打开原生弹窗：DISPLAY = 仅右上角一个 ×；allowEscapeClose:false 防 Esc 误关
     _callGenericPopup(overlay, _POPUP_TYPE.DISPLAY, "", {
         wide: true,
+        large: true,
+        leftAlign: true,
         allowVerticalScrolling: true,
         allowEscapeClose: false,
         onOpen: (popup) => { try { popup.dlg.classList.add("pe-host"); } catch { /* ignore */ } },
