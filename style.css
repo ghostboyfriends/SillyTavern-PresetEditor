@@ -301,9 +301,10 @@
 
 /* ---------- 响应式（手机 / 平板）---------- */
 @media (max-width:768px) {
-    /* 用动态视口铺满，避免 iOS 下 100vh 比可视区高、居中后头尾被裁 */
-    #pe-overlay { align-items:stretch; justify-content:stretch; padding:0; backdrop-filter:blur(2px); }
-    #pe-modal { width:100%; max-width:none; height:100%; max-height:100dvh; min-height:0; border-radius:0; border-left:none; border-right:none; }
+    /* 用视口单位铺满：不依赖父层高度（height:100% 在某些容器里无法解析会塌成一条）。
+       100vh 作回退，支持 dvh 的浏览器用 100dvh，修复 iOS 地址栏导致的溢出。*/
+    #pe-overlay { padding:0; backdrop-filter:blur(2px); }
+    #pe-modal { width:100vw; max-width:none; height:100vh; height:100dvh; max-height:100dvh; border-radius:0; border:none; }
     /* 头部换行：品牌+色板+关闭一行，标签页独占一行 */
     .pe-header { flex-wrap:wrap; row-gap:10px; gap:10px; padding:12px 14px; }
     .pe-brand-en { display:none; }
