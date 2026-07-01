@@ -317,11 +317,13 @@ function fmtNum(n) { return Number(n || 0).toLocaleString("en-US"); }
 // 主弹窗
 // =====================================================================
 function openEditor() {
-    if (document.getElementById("pe-overlay")) return; // 已打开
+    if (document.getElementById("pe-dialog")) return; // 已打开
     if (!loadStateFromLive()) return;
 
-    const overlay = document.createElement("div");
-    overlay.id = "pe-overlay";
+    // 用原生 <dialog> + showModal()：渲染在浏览器顶层，无视 SillyTavern 移动端容器的
+    // transform / overflow / z-index，任何屏幕尺寸都能正确铺满，不依赖像素断点。
+    const overlay = document.createElement("dialog");
+    overlay.id = "pe-dialog";
     overlay.innerHTML = `
       <div id="pe-modal" role="dialog" aria-label="${LABEL}" data-pe-theme="${getSavedTheme()}">
         <div class="pe-header">
@@ -360,6 +362,9 @@ function openEditor() {
         </div>
       </div>`;
     document.body.appendChild(overlay);
+    try { overlay.showModal(); } catch { overlay.setAttribute("open", ""); }
+    // 防误触：按 Esc 不关闭（cancel 事件），点遮罩也不关闭；仅右上角 ✕ 可关闭。
+    overlay.addEventListener("cancel", e => e.preventDefault());
 
     // tab 切换
     overlay.querySelectorAll(".pe-tab").forEach(btn => {
@@ -394,7 +399,10 @@ function openEditor() {
 }
 
 function closeEditor() {
-    document.getElementById("pe-overlay")?.remove();
+    const dlg = document.getElementById("pe-dialog");
+    if (!dlg) return;
+    try { dlg.close(); } catch { /* ignore */ }
+    dlg.remove();
 }
 
 // =====================================================================
