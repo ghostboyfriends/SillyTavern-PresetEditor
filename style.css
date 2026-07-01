@@ -85,8 +85,8 @@
     display: flex; flex-direction: column;
     background: var(--pe-panel); color: var(--pe-text);
     font-family: var(--pe-sans);
-    border-radius: 12px;
-    overflow: hidden;
+    border-radius: 0;
+    overflow: visible;
     transition: background .35s ease, color .35s ease;
 }
 #pe-modal::before {
@@ -95,29 +95,33 @@
     transition: background-image .35s ease;
 }
 .pe-header, .pe-body, .pe-footer { position: relative; z-index: 1; }
+/* 头部与底部吸附在弹窗滚动容器上下缘：滚动时随时可切标签、可点保存 */
+.pe-header { position: sticky; top: 0; z-index: 6; }
+.pe-footer { position: sticky; bottom: 0; z-index: 6; }
 
 /* ---------- 头部 ---------- */
-.pe-header { display:flex; align-items:center; gap:16px; flex-wrap:wrap; row-gap:10px; padding:16px 20px; border-bottom:1px solid var(--pe-border); background-color:var(--pe-panel); background-image:linear-gradient(180deg,rgba(255,255,255,.022),transparent); flex-shrink:0; }
-.pe-brand { display:flex; align-items:center; gap:12px; }
-.pe-mark { width:30px; height:30px; border-radius:9px; background:var(--pe-accent-btn); color:var(--pe-accent-ink); display:flex; align-items:center; justify-content:center; font-size:14px; box-shadow:0 4px 14px var(--pe-accent-glow); }
+.pe-header { display:flex; align-items:center; gap:16px; flex-wrap:wrap; row-gap:12px; padding:16px 20px; border-bottom:1px solid var(--pe-border); background-color:var(--pe-panel); background-image:linear-gradient(180deg,rgba(255,255,255,.022),transparent); flex-shrink:0; }
+.pe-brand { display:flex; align-items:center; gap:12px; order:1; }
+.pe-mark { width:30px; height:30px; border-radius:9px; background:var(--pe-accent-btn); color:var(--pe-accent-ink); display:flex; align-items:center; justify-content:center; font-size:14px; box-shadow:0 4px 14px var(--pe-accent-glow); flex-shrink:0; }
 .pe-brand-txt { display:flex; flex-direction:column; line-height:1.1; }
-.pe-title-main { font-family:var(--pe-name-font); font-weight:600; font-size:16px; letter-spacing:.4px; }
+.pe-title-main { font-family:var(--pe-name-font); font-weight:600; font-size:16px; letter-spacing:.4px; white-space:nowrap; }
 .pe-brand-en { font-family:var(--pe-mono); font-size:9px; letter-spacing:3px; text-transform:uppercase; color:var(--pe-faint); margin-top:2px; }
-.pe-tabs { display:flex; gap:22px; flex:1; }
-.pe-tab { position:relative; background:transparent; border:none; color:var(--pe-sub); cursor:pointer; font-size:13px; font-family:inherit; padding:4px 0; transition:color .15s; }
+/* 标签始终独占一行、横排、不换行——任何屏宽都不会竖排 */
+.pe-tabs { display:flex; gap:22px; order:4; flex-basis:100%; width:100%; flex-wrap:wrap; }
+.pe-tab { position:relative; background:transparent; border:none; color:var(--pe-sub); cursor:pointer; font-size:14px; font-family:inherit; padding:4px 0; white-space:nowrap; transition:color .15s; }
 .pe-tab:hover { color:var(--pe-text); }
 .pe-tab.pe-active { color:var(--pe-text); }
 .pe-tab.pe-active::after { content:""; position:absolute; left:0; right:0; bottom:-1px; height:2px; border-radius:2px; background:var(--pe-accent); box-shadow:0 0 8px var(--pe-accent-glow); }
 
 /* 主题色板按钮 */
-.pe-themes { display:flex; gap:9px; align-items:center; }
+.pe-themes { display:flex; gap:9px; align-items:center; order:2; margin-left:auto; }
 .pe-theme-dot { width:18px; height:18px; border-radius:50%; border:1px solid rgba(255,255,255,.22); cursor:pointer; padding:0; transition:transform .15s, box-shadow .2s; }
 .pe-theme-dot:hover { transform:scale(1.18); }
 .pe-dot-obsidian { background:linear-gradient(135deg,#dcb96f,#c19f56); --dot:#d8b46a; }
 .pe-dot-manuscript { background:linear-gradient(135deg,#c79a55,#8c4a3f); --dot:#c79a55; }
 .pe-dot-platinum { background:linear-gradient(135deg,#c3ccdb,#a6b0c4); --dot:#b8c2d4; }
 .pe-theme-dot.pe-active { box-shadow:0 0 0 2px var(--pe-panel), 0 0 0 3.5px var(--dot); }
-#pe-close { background:transparent; border:none; color:var(--pe-faint); font-size:17px; cursor:pointer; padding:6px 8px; border-radius:8px; transition:.15s; }
+#pe-close { order:3; background:transparent; border:none; color:var(--pe-faint); font-size:17px; cursor:pointer; padding:6px 8px; border-radius:8px; transition:.15s; }
 #pe-close:hover { color:var(--pe-text); background:rgba(255,255,255,.06); }
 
 /* ---------- 主体 ---------- */
