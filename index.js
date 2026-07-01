@@ -23,6 +23,8 @@ let _promptManager = null;  // promptManager 实例
 let _getPresetManager = null;
 let _saveSettingsDebounced = null;
 let _extSettings = {};
+let _callGenericPopup = null;
+let _POPUP_TYPE = null;
 
 // 工作副本(编辑中的状态，未应用前不写回真实设置)
 let state = {
@@ -82,6 +84,17 @@ async function loadDeps() {
     }
 
     _saveSettingsDebounced = ctx?.saveSettingsDebounced ?? window.saveSettingsDebounced ?? (() => {});
+
+    // 原生弹窗接口（用它承载 UI，移动端适配/滚动/层级由酒馆官方处理）
+    _callGenericPopup = ctx?.callGenericPopup ?? null;
+    _POPUP_TYPE = ctx?.POPUP_TYPE ?? null;
+    if (!_callGenericPopup || !_POPUP_TYPE) {
+        try {
+            const p = await import("../../../popup.js");
+            _callGenericPopup = _callGenericPopup || p.callGenericPopup;
+            _POPUP_TYPE = _POPUP_TYPE || p.POPUP_TYPE;
+        } catch (e) { console.warn(`[${EXT_ID}] 无法加载 popup.js`, e); }
+    }
 
     // 扩展设置（用于记住主题选择）
     _extSettings = ctx?.extensionSettings ?? window.extension_settings ?? {};
@@ -317,15 +330,20 @@ function fmtNum(n) { return Number(n || 0).toLocaleString("en-US"); }
 // 主弹窗
 // =====================================================================
 function openEditor() {
-    if (document.getElementById("pe-dialog")) return; // 已打开
+    if (document.getElementById("pe-modal")) return; // 已打开
+    if (typeof _callGenericPopup !== "function" || !_POPUP_TYPE) {
+        toast("error", "未找到 SillyTavern 弹窗接口，无法打开编辑器。");
+        return;
+    }
     if (!loadStateFromLive()) return;
 
-    // 用原生 <dialog> + showModal()：渲染在浏览器顶层，无视 SillyTavern 移动端容器的
-    // transform / overflow / z-index，任何屏幕尺寸都能正确铺满，不依赖像素断点。
-    const overlay = document.createElement("dialog");
-    overlay.id = "pe-dialog";
+    // 关键：把 UI 装进酒馆原生弹窗（callGenericPopup）。原生弹窗基于 <dialog>，
+    // 其层级、滚动、尺寸、移动端适配都由酒馆官方处理，能绕开自定义浮层在手机上的
+    // 各种坑（滑动乱跳、尺寸失控、被 transform 容器困住等）。
+    const overlay = document.createElement("div"); // 作为 popup 内容根节点（沿用 #pe-modal 样式）
+    overlay.id = "pe-modal";
+    overlay.setAttribute("data-pe-theme", getSavedTheme());
     overlay.innerHTML = `
-      <div id="pe-modal" role="dialog" aria-label="${LABEL}" data-pe-theme="${getSavedTheme()}">
         <div class="pe-header">
           <div class="pe-brand">
             <span class="pe-mark"><i class="fa-solid fa-layer-group"></i></span>
@@ -359,12 +377,15 @@ function openEditor() {
             <button class="pe-btn" id="pe-apply" title="仅在当前会话临时生效，不写入预设文件（用于试效果）"><i class="fa-solid fa-bolt"></i> 应用</button>
             <button class="pe-btn pe-btn-primary" id="pe-save" title="写入当前预设文件并立即生效"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
           </div>
-        </div>
-      </div>`;
-    document.body.appendChild(overlay);
-    try { overlay.showModal(); } catch { overlay.setAttribute("open", ""); }
-    // 防误触：按 Esc 不关闭（cancel 事件），点遮罩也不关闭；仅右上角 ✕ 可关闭。
-    overlay.addEventListener("cancel", e => e.preventDefault());
+        </div>`;
+
+    // 打开原生弹窗：DISPLAY = 仅右上角一个 ×；allowEscapeClose:false 防 Esc 误关
+    _callGenericPopup(overlay, _POPUP_TYPE.DISPLAY, "", {
+        wide: true,
+        allowVerticalScrolling: true,
+        allowEscapeClose: false,
+        onOpen: (popup) => { try { popup.dlg.classList.add("pe-host"); } catch { /* ignore */ } },
+    });
 
     // tab 切换
     overlay.querySelectorAll(".pe-tab").forEach(btn => {
@@ -379,7 +400,6 @@ function openEditor() {
     });
 
     overlay.querySelector("#pe-close").addEventListener("click", closeEditor);
-    // 防误触：点击界面外的遮罩、按 Esc 都不再关闭，避免编辑内容丢失；仅右上角 ✕ 可关闭。
 
     overlay.querySelector("#pe-apply").addEventListener("click", () => { if (applyToLive()) toast("success", "已在当前会话生效（未写入预设文件）。"); });
     overlay.querySelector("#pe-save").addEventListener("click", saveToPreset);
@@ -399,10 +419,18 @@ function openEditor() {
 }
 
 function closeEditor() {
-    const dlg = document.getElementById("pe-dialog");
-    if (!dlg) return;
-    try { dlg.close(); } catch { /* ignore */ }
-    dlg.remove();
+    const modal = document.getElementById("pe-modal");
+    const host = modal?.closest(".popup") || document.querySelector(".pe-host");
+    if (!host) return;
+    const btn = host.querySelector(".popup-button-close")
+        || host.querySelector(".popup-button-ok")
+        || host.querySelector(".popup-button-cancel");
+    if (btn) btn.click();                       // 走酒馆原生关闭（含清理）
+    // 兜底：若原生关闭未生效，强制移除，保证一定能关
+    setTimeout(() => {
+        const stillHost = document.getElementById("pe-modal")?.closest(".popup");
+        if (stillHost) { try { stillHost.close?.(); } catch { /* ignore */ } stillHost.remove(); }
+    }, 80);
 }
 
 // =====================================================================

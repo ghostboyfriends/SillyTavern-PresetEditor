@@ -31,6 +31,10 @@ SillyTavern/public/scripts/extensions/third-party/preset-editor/
 - **保存到预设**：再尝试把整份预设写入当前预设文件。若你的 ST 版本接口不同导致失败，改用「应用」后再点 ST 原生的「更新当前预设」即可。
 - **导出 / 导入 JSON**：备份与迁移（导入支持本扩展格式或完整 ST 预设文件）。
 
+## v1.6 更新（移动端真正修好）
+
+- **改用酒馆原生弹窗 `callGenericPopup` 承载界面**（与关键词搜索扩展同款方案）：弹窗的层级、滚动、尺寸、移动端适配全部交给 SillyTavern 官方处理，彻底解决手机端「上下滑动乱跳、窗口过大、被容器困住而消失」等问题。整块面板随原生弹窗滚动，`allowEscapeClose:false` 防 Esc 误关，仅右上角 ✕ 可关闭。
+
 ## v1.5 更新（移动端根治）
 
 - **改用原生 `<dialog>` + `showModal()` 顶层渲染**：弹窗进入浏览器 top-layer，天然无视 SillyTavern 移动端容器的 `transform`/`overflow`/层级——这是之前手机上弹窗消失/塌陷/错位的真正原因，与屏幕尺寸无关。
