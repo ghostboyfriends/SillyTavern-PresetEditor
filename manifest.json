@@ -1,12 +1,12 @@
 {
-    "display_name": "数据管家 (Data Manager)",
+    "display_name": "预设编辑器 (Preset Editor)",
     "loading_order": 100,
     "requires": [],
     "optional": [],
     "js": "index.js",
     "css": "style.css",
-    "author": "for thea",
-    "version": "1.4.0",
+    "author": "Jay & Claude",
+    "version": "1.9.0",
     "homePage": "",
     "auto_update": false
 }
