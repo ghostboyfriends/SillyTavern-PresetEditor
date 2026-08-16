@@ -339,6 +339,7 @@ function fmtNum(n) { return Number(n || 0).toLocaleString("en-US"); }
 // =====================================================================
 // ===================== 缝合台（双栏拖拽）+ 放大编辑 =====================
 const _benchExpL = new Set();
+const _benchSel = new Set();
 let _sortBL = null, _sortBR = null, _benchFI = null;
 
 function wiToPrompt(en) {
@@ -360,7 +361,7 @@ function benchLoadSource(obj) {
         if (!arr.length) { toast("error", "这个世界书里没有条目。"); return; }
         const list = arr.map(en => { const p = wiToPrompt(en); p._sid = uuid(); p._enabled = !en.disable; return p; });
         state.benchLeft = { name: obj.name || "世界书", list, wi: true };
-        _benchExpL.clear(); renderBench(); toast("success", `已载入世界书：${list.length} 条，可拖到右侧缝进当前预设。`); return;
+        _benchExpL.clear(); _benchSel.clear(); renderBench(); toast("success", `已载入世界书：${list.length} 条，可拖到右侧缝进当前预设。`); return;
     }
     const prompts = Array.isArray(obj.prompts) ? obj.prompts : (Array.isArray(obj) ? obj : null);
     if (!prompts) { toast("error", "来源里没找到 prompts 或 entries，请确认是聊天补全预设或世界书。"); return; }
@@ -372,7 +373,7 @@ function benchLoadSource(obj) {
     order.forEach(o => { if (map[o.identifier]) { const p = deepClone(map[o.identifier]); p._sid = uuid(); p._enabled = o.enabled !== false; list.push(p); seen[o.identifier] = 1; } });
     prompts.forEach(p => { if (p && p.identifier && !seen[p.identifier]) { const c = deepClone(p); c._sid = uuid(); c._enabled = false; list.push(c); } });
     state.benchLeft = { name: obj.name || "未命名预设", list };
-    _benchExpL.clear(); renderBench(); toast("success", `已载入来源：${list.length} 条。`);
+    _benchExpL.clear(); _benchSel.clear(); renderBench(); toast("success", `已载入来源：${list.length} 条。`);
 }
 
 function benchFileInput() {
@@ -386,10 +387,40 @@ function benchFileInput() {
     document.body.appendChild(_benchFI); return _benchFI;
 }
 
+// 列出酒馆里的聊天补全预设名
+function benchPresetNames() {
+    try {
+        if (typeof _getPresetManager !== "function") return [];
+        const pm = _getPresetManager("openai");
+        const names = pm?.getAllPresets?.() || [];
+        return Array.isArray(names) ? names.filter(Boolean) : [];
+    } catch (e) { console.warn(`[${EXT_ID}] 列出酒馆预设失败`, e); return []; }
+}
+// 按名把酒馆预设载入为左侧来源
+function benchLoadFromPreset(name) {
+    if (!name) return;
+    try {
+        const pm = _getPresetManager("openai");
+        const list = pm?.getPresetList?.("openai") || {};
+        const presets = list.presets || [];
+        const idx = list.preset_names ? list.preset_names[name] : undefined;
+        const obj = (idx != null && idx >= 0) ? presets[idx] : null;
+        if (!obj) { toast("error", "没找到该预设的数据。"); return; }
+        const cloned = deepClone(obj); cloned.name = name;
+        benchLoadSource(cloned);
+    } catch (e) { console.warn(`[${EXT_ID}] 载入酒馆预设失败`, e); toast("error", "载入酒馆预设失败，详见控制台。"); }
+}
+function benchPresetSelectHtml(id) {
+    const names = benchPresetNames();
+    if (!names.length) return "";
+    return `<select class="pe-bench-preset" id="${id}" title="从酒馆预设选择来源"><option value="">酒馆预设…</option>${names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("")}</select>`;
+}
+
 function dwrapLeft(p) {
-    const rc = roleKey(p.role); const marker = isMarker(p); const tok = marker ? 0 : roughTokens(p.content || ""); const ex = _benchExpL.has(p._sid);
-    return `<div class="pe-dwrap" data-sid="${esc(p._sid)}">
+    const rc = roleKey(p.role); const marker = isMarker(p); const tok = marker ? 0 : roughTokens(p.content || ""); const ex = _benchExpL.has(p._sid); const sel = _benchSel.has(p._sid);
+    return `<div class="pe-dwrap ${sel ? "sel" : ""}" data-sid="${esc(p._sid)}">
       <div class="pe-dcard" data-vl="${esc(p._sid)}">
+        <input type="checkbox" class="pe-selcb" data-sel="${esc(p._sid)}" ${sel ? "checked" : ""} title="多选">
         <span class="pe-grip">⠿</span><span class="pe-role pe-bg-${rc}">${ROLE_LABEL[p.role] || "系统"}</span>
         <span class="pe-dname">${p._wi ? "📖 " : ""}${esc(displayName(p))}</span>
         <span class="pe-dmeta">${marker ? "占位符" : "≈" + fmtNum(tok) + "t"}</span>
@@ -412,18 +443,21 @@ function dwrapRight(o, i) {
 function renderBench() {
     const pane = document.querySelector('.pe-pane[data-pane="bench"]'); if (!pane) return;
     const left = state.benchLeft;
+    const presetSel = benchPresetSelectHtml("pe-bench-preset");
     const leftBody = left
         ? (left.list.length ? left.list.map(dwrapLeft).join("") : `<div class="pe-col-empty">这个来源没有条目。</div>`)
-        : `<div class="pe-col-empty">载入另一个<b>预设</b>，或一本<b>世界书</b>，把里面的条目拖到右侧当前预设。<br><br><button class="pe-btn pe-btn-primary" id="pe-bench-load" style="display:inline-flex">选择 预设 / 世界书 JSON</button></div>`;
+        : `<div class="pe-col-empty">从上方<b>「酒馆预设…」</b>下拉直接选一个预设作为来源，${presetSel ? "" : "（未检测到预设管理器）"}<br>或载入另一个预设 / 一本<b>世界书</b>的 JSON 文件，把里面的条目拖到右侧当前预设。<br><br><button class="pe-btn pe-btn-primary" id="pe-bench-load" style="display:inline-flex">选择 预设 / 世界书 JSON</button></div>`;
     const rightBody = state.order.length ? state.order.map((o, i) => dwrapRight(o, i)).join("") : `<div class="pe-col-empty">当前预设暂无条目。</div>`;
     pane.innerHTML = `
-      <div class="pe-bench-hint">↔ 拖左侧条目的 ⠿ 手柄放到右侧任意位置即可缝入当前预设；世界书条目会自动转成提示词。右侧可上下拖动改顺序。缝完记得点底部「保存」写回预设。</div>
+      <div class="pe-bench-hint">↔ 拖左侧条目的 ⠿ 手柄放到右侧任意位置即可缝入当前预设；或勾选多条点「缝入所选」。世界书条目会自动转成提示词。缝完记得点底部「保存」写回预设。</div>
       <div class="pe-bench">
-        <div class="pe-col"><div class="pe-col-head"><span class="t">来源（左）${left && left.wi ? " · 📖世界书" : ""}</span><span class="c">${left ? esc(left.name) + " · " + left.list.length + " 条" : "未载入"}</span><span style="flex:1"></span>${left ? `<button class="pe-mini" id="pe-bench-load" title="换来源">⇪</button>` : ""}</div>
+        <div class="pe-col"><div class="pe-col-head"><span class="t">来源（左）${left && left.wi ? " · 📖世界书" : ""}</span><span class="c">${left ? esc(left.name) + " · " + left.list.length + " 条" : "未载入"}</span><span style="flex:1"></span>${presetSel}<button class="pe-mini" id="pe-bench-load" title="导入 预设/世界书 文件">⇪</button></div>
+          ${left && left.list.length ? `<div class="pe-bench-tools"><label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--pe-sub);cursor:pointer"><input type="checkbox" class="pe-selcb" id="pe-sel-all" ${_benchSel.size === left.list.length ? "checked" : ""}> 全选</label><span class="n" id="pe-sel-n">已选 ${_benchSel.size}</span><span style="flex:1"></span><button class="pe-btn pe-btn-primary" id="pe-sel-transfer">缝入所选 →</button><button class="pe-btn" id="pe-sel-clear">清空</button></div>` : ""}
           <div class="pe-col-list" id="pe-bench-left">${leftBody}</div></div>
         <div class="pe-col"><div class="pe-col-head"><span class="t">当前预设（右）</span><span class="c">${state.order.length} 条</span></div>
           <div class="pe-col-list" id="pe-bench-right">${rightBody}</div></div>
       </div>`;
+    pane.querySelector("#pe-bench-preset")?.addEventListener("change", e => { benchLoadFromPreset(e.target.value); });
     pane.querySelector("#pe-bench-load")?.addEventListener("click", () => benchFileInput().click());
     pane.querySelectorAll("[data-rt]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); const i = +b.dataset.rt; state.order[i].enabled = !state.order[i].enabled; renderBench(); }));
     pane.querySelectorAll("[data-rd]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); const i = +b.dataset.rd; state.order.splice(i, 1); renderBench(); }));
@@ -431,7 +465,31 @@ function renderBench() {
     pane.querySelectorAll("[data-vlb]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); togV(b.dataset.vlb); }));
     pane.querySelectorAll("[data-vl]").forEach(h => h.addEventListener("click", e => { if (e.target.closest(".pe-grip,button")) return; togV(h.dataset.vl); }));
     pane.querySelectorAll("[data-vmax]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); const p = state.benchLeft?.list.find(x => x._sid === b.dataset.vmax); if (p) openMaxi(p, null, true); }));
+    // 多选
+    pane.querySelectorAll(".pe-selcb[data-sel]").forEach(cb => cb.addEventListener("change", e => { e.stopPropagation(); const s = cb.dataset.sel; if (cb.checked) _benchSel.add(s); else _benchSel.delete(s); renderBench(); }));
+    pane.querySelector("#pe-sel-all")?.addEventListener("change", e => { if (e.target.checked) state.benchLeft.list.forEach(p => _benchSel.add(p._sid)); else _benchSel.clear(); renderBench(); });
+    pane.querySelector("#pe-sel-clear")?.addEventListener("click", () => { _benchSel.clear(); renderBench(); });
+    pane.querySelector("#pe-sel-transfer")?.addEventListener("click", benchTransferSelected);
     initBenchSort();
+}
+
+function benchTransferSelected() {
+    if (!state.benchLeft) return;
+    const chosen = state.benchLeft.list.filter(p => _benchSel.has(p._sid));
+    if (!chosen.length) { toast("info", "还没勾选任何条目。"); return; }
+    let n = 0, skip = 0;
+    chosen.forEach(src => {
+        if (isMarker(src)) {
+            if (findPrompt(src.identifier)) { skip++; return; }
+            const c = deepClone(src); delete c._sid; delete c._enabled; delete c._wi; state.prompts.push(c);
+            state.order.push({ identifier: src.identifier, enabled: src._enabled !== false }); n++;
+        } else {
+            const c = deepClone(src); delete c._sid; delete c._enabled; delete c._wi; c.identifier = uuid(); state.prompts.push(c);
+            state.order.push({ identifier: c.identifier, enabled: src._enabled !== false }); n++;
+        }
+    });
+    _benchSel.clear(); renderBench();
+    toast("success", `已缝入 ${n} 个条目${skip ? `（跳过 ${skip} 个重复占位符）` : ""}。`);
 }
 
 function initBenchSort() {
