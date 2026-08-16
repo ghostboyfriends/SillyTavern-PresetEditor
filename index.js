@@ -339,8 +339,20 @@ function fmtNum(n) { return Number(n || 0).toLocaleString("en-US"); }
 // =====================================================================
 // ===================== 缝合台（双栏拖拽）+ 放大编辑 =====================
 const _benchExpL = new Set();
+const _benchExpR = new Set();
 const _benchSel = new Set();
 let _sortBL = null, _sortBR = null, _benchFI = null;
+// 撤销/恢复历史（结构性改动：增删、排序、启停、缝合）
+let _undo = [], _redo = [];
+function histSnapshot() { return { prompts: deepClone(state.prompts), order: deepClone(state.order) }; }
+function pushUndo() { _undo.push(histSnapshot()); if (_undo.length > 80) _undo.shift(); _redo = []; updateHistButtons(); }
+function restoreHist(s) { state.prompts = deepClone(s.prompts); state.order = deepClone(s.order); state.expanded.clear(); renderEditor(); const at = document.querySelector(".pe-tab.pe-active")?.dataset.tab; if (at === "bench") renderBench(); updateHistButtons(); }
+function doUndo() { if (!_undo.length) { toast("info", "没有可撤销的操作了。"); return; } _redo.push(histSnapshot()); restoreHist(_undo.pop()); toast("info", "已撤销。"); }
+function doRedo() { if (!_redo.length) { toast("info", "没有可恢复的操作了。"); return; } _undo.push(histSnapshot()); restoreHist(_redo.pop()); toast("info", "已恢复。"); }
+function updateHistButtons() {
+    const u = document.getElementById("pe-undo"), r = document.getElementById("pe-redo");
+    if (u) u.disabled = !_undo.length; if (r) r.disabled = !_redo.length;
+}
 
 function wiToPrompt(en) {
     const isDepth = (en.position === 4);
@@ -429,15 +441,16 @@ function dwrapLeft(p) {
 }
 
 function dwrapRight(o, i) {
-    const p = findPrompt(o.identifier); if (!p) return ""; const rc = roleKey(p.role); const marker = isMarker(p); const tok = marker ? 0 : roughTokens(p.content || "");
+    const p = findPrompt(o.identifier); if (!p) return ""; const rc = roleKey(p.role); const marker = isMarker(p); const tok = marker ? 0 : roughTokens(p.content || ""); const ex = _benchExpR.has(o.identifier);
     return `<div class="pe-dwrap ${o.enabled ? "" : "pe-disabled"}" data-oid="${i}">
       <div class="pe-dcard">
         <span class="pe-grip">⠿</span><span class="pe-role pe-bg-${rc}">${ROLE_LABEL[p.role] || "系统"}</span>
         <span class="pe-dname">${esc(displayName(p))}</span>
         <span class="pe-dmeta">${marker ? "占位符" : "≈" + fmtNum(tok) + "t"}</span>
+        <button class="pe-mini" data-vrb="${esc(o.identifier)}" title="查看内容">${ex ? "▲" : "👁"}</button>
         <button class="pe-mini" data-rt="${i}" title="${o.enabled ? "停用" : "启用"}">${o.enabled ? "◉" : "○"}</button>
         <button class="pe-mini pe-del" data-rd="${i}" title="移除">✕</button>
-      </div></div>`;
+      </div>${ex ? `<div class="pe-dedit"><div style="white-space:pre-wrap;font-family:var(--pe-mono);font-size:12px;line-height:1.6;color:var(--pe-sub);max-height:200px;overflow:auto">${marker ? "占位符：内容由 SillyTavern 运行时填充。" : esc(p.content || "(空)")}</div>${marker ? "" : `<div><button class="pe-maxi-btn" data-vmaxr="${esc(o.identifier)}">⛶ 放大编辑</button></div>`}</div>` : ""}</div>`;
 }
 
 function renderBench() {
@@ -459,24 +472,41 @@ function renderBench() {
       </div>`;
     pane.querySelector("#pe-bench-preset")?.addEventListener("change", e => { benchLoadFromPreset(e.target.value); });
     pane.querySelector("#pe-bench-load")?.addEventListener("click", () => benchFileInput().click());
-    pane.querySelectorAll("[data-rt]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); const i = +b.dataset.rt; state.order[i].enabled = !state.order[i].enabled; renderBench(); }));
-    pane.querySelectorAll("[data-rd]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); const i = +b.dataset.rd; state.order.splice(i, 1); renderBench(); }));
-    const togV = s => { _benchExpL.has(s) ? _benchExpL.delete(s) : _benchExpL.add(s); renderBench(); };
-    pane.querySelectorAll("[data-vlb]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); togV(b.dataset.vlb); }));
-    pane.querySelectorAll("[data-vl]").forEach(h => h.addEventListener("click", e => { if (e.target.closest(".pe-grip,button")) return; togV(h.dataset.vl); }));
+    pane.querySelectorAll("[data-rt]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); pushUndo(); const i = +b.dataset.rt; state.order[i].enabled = !state.order[i].enabled; renderBench(); }));
+    pane.querySelectorAll("[data-rd]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); pushUndo(); const i = +b.dataset.rd; const id = state.order[i].identifier; state.order.splice(i, 1); _benchExpR.delete(id); renderBench(); }));
+    // 左侧：查看内容
+    const togVL = s => { _benchExpL.has(s) ? _benchExpL.delete(s) : _benchExpL.add(s); renderBench(); };
+    pane.querySelectorAll("[data-vlb]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); togVL(b.dataset.vlb); }));
     pane.querySelectorAll("[data-vmax]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); const p = state.benchLeft?.list.find(x => x._sid === b.dataset.vmax); if (p) openMaxi(p, null, true); }));
-    // 多选
-    pane.querySelectorAll(".pe-selcb[data-sel]").forEach(cb => cb.addEventListener("change", e => { e.stopPropagation(); const s = cb.dataset.sel; if (cb.checked) _benchSel.add(s); else _benchSel.delete(s); renderBench(); }));
+    // 右侧：查看内容 / 放大编辑
+    const togVR = id => { _benchExpR.has(id) ? _benchExpR.delete(id) : _benchExpR.add(id); renderBench(); };
+    pane.querySelectorAll("[data-vrb]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); togVR(b.dataset.vrb); }));
+    pane.querySelectorAll("[data-vmaxr]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); const p = findPrompt(b.dataset.vmaxr); if (p) openMaxi(p, null, false); }));
+    // 左侧：多选（点整条即可选，轻量更新不重绘）
+    pane.querySelectorAll(".pe-selcb[data-sel]").forEach(cb => cb.addEventListener("change", e => { e.stopPropagation(); benchToggleSel(cb.dataset.sel); }));
+    pane.querySelectorAll("[data-vl]").forEach(h => h.addEventListener("click", e => { if (e.target.closest(".pe-grip,button,input,label")) return; benchToggleSel(h.dataset.vl); }));
     pane.querySelector("#pe-sel-all")?.addEventListener("change", e => { if (e.target.checked) state.benchLeft.list.forEach(p => _benchSel.add(p._sid)); else _benchSel.clear(); renderBench(); });
     pane.querySelector("#pe-sel-clear")?.addEventListener("click", () => { _benchSel.clear(); renderBench(); });
     pane.querySelector("#pe-sel-transfer")?.addEventListener("click", benchTransferSelected);
+    pane.querySelector("#pe-bench-preset")?.addEventListener("change", e => { benchLoadFromPreset(e.target.value); });
     initBenchSort();
+}
+
+// 轻量切换左侧多选（只改本卡片 + 计数，不整块重绘，避免"只能单选"的错觉）
+function benchToggleSel(sid) {
+    if (_benchSel.has(sid)) _benchSel.delete(sid); else _benchSel.add(sid);
+    const pane = document.querySelector('.pe-pane[data-pane="bench"]'); if (!pane) return;
+    const wrap = [...pane.querySelectorAll('#pe-bench-left .pe-dwrap[data-sid]')].find(w => w.dataset.sid === sid);
+    if (wrap) { const on = _benchSel.has(sid); wrap.classList.toggle("sel", on); const cb = wrap.querySelector(".pe-selcb"); if (cb) cb.checked = on; }
+    const n = pane.querySelector("#pe-sel-n"); if (n) n.textContent = "已选 " + _benchSel.size;
+    const all = pane.querySelector("#pe-sel-all"); if (all && state.benchLeft) all.checked = _benchSel.size === state.benchLeft.list.length;
 }
 
 function benchTransferSelected() {
     if (!state.benchLeft) return;
     const chosen = state.benchLeft.list.filter(p => _benchSel.has(p._sid));
     if (!chosen.length) { toast("info", "还没勾选任何条目。"); return; }
+    pushUndo();
     let n = 0, skip = 0;
     chosen.forEach(src => {
         if (isMarker(src)) {
@@ -507,6 +537,7 @@ function onBenchAdd(evt) {
     if (evt.item.parentNode) evt.item.parentNode.removeChild(evt.item);
     const src = state.benchLeft && state.benchLeft.list.find(p => p._sid === sid);
     if (!src) { renderBench(); return; }
+    pushUndo();
     let entry = null, skip = false;
     if (isMarker(src)) {
         if (findPrompt(src.identifier)) skip = true;
@@ -521,6 +552,7 @@ function onBenchAdd(evt) {
 function onBenchUpdate(evt) {
     const from = evt.oldIndex, to = evt.newIndex;
     if (from == null || to == null || from === to) { renderBench(); return; }
+    pushUndo();
     const [m] = state.order.splice(from, 1); state.order.splice(to, 0, m); renderBench();
 }
 
@@ -543,6 +575,26 @@ function openMaxi(tgt, smallTa, readonly) {
     ov.querySelector("#pe-maxi-done").addEventListener("click", close);
     ov.addEventListener("click", e => { if (e.target === ov) close(); });
     setTimeout(() => ta.focus(), 30);
+}
+
+async function saveAsNewPreset() {
+    let name = null;
+    try {
+        if (typeof _callGenericPopup === "function" && _POPUP_TYPE) name = await _callGenericPopup("把当前内容另存为新预设，请输入名称：", _POPUP_TYPE.INPUT, "");
+        else name = window.prompt("把当前内容另存为新预设，请输入名称：", "");
+    } catch (_) { name = window.prompt("另存为新预设，请输入名称：", ""); }
+    if (name == null || name === false) return;
+    name = String(name).trim(); if (!name) { toast("info", "名称不能为空。"); return; }
+    if (!applyToLive()) return;
+    try {
+        const pm = typeof _getPresetManager === "function" ? _getPresetManager("openai") : null;
+        if (pm && typeof pm.savePreset === "function") {
+            await pm.savePreset(name, deepClone(getOai()));
+            toast("success", `已另存为新预设「${name}」，可在酒馆预设栏切换。`);
+        } else {
+            toast("info", "未找到预设管理器，无法另存为。可用底部「导出」备份 JSON。");
+        }
+    } catch (e) { console.warn(`[${EXT_ID}] 另存为失败`, e); toast("error", "另存为失败，详见控制台。"); }
 }
 
 function openEditor() {
@@ -600,8 +652,11 @@ function openEditor() {
             <input type="file" id="pe-import-file" accept="application/json" style="display:none">
           </div>
           <div class="pe-footer-right">
-            <button class="pe-btn pe-btn-icon" id="pe-reload" title="放弃未保存的更改，重新载入"><i class="fa-solid fa-rotate-left"></i></button>
+            <button class="pe-btn pe-btn-icon" id="pe-undo" title="撤销（增删/排序/启停/缝合）" disabled><i class="fa-solid fa-rotate-left"></i></button>
+            <button class="pe-btn pe-btn-icon" id="pe-redo" title="恢复" disabled><i class="fa-solid fa-rotate-right"></i></button>
+            <button class="pe-btn pe-btn-icon" id="pe-reload" title="放弃全部未保存的更改，从预设重新载入"><i class="fa-solid fa-arrows-rotate"></i></button>
             <button class="pe-btn" id="pe-apply" title="仅在当前会话临时生效，不写入预设文件（用于试效果）"><i class="fa-solid fa-bolt"></i> 应用</button>
+            <button class="pe-btn" id="pe-saveas" title="把当前内容另存为一个新预设"><i class="fa-solid fa-file-circle-plus"></i> 另存为</button>
             <button class="pe-btn pe-btn-primary" id="pe-save" title="写入当前预设文件并立即生效"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
           </div>
         </div>`;
@@ -633,7 +688,10 @@ function openEditor() {
 
     overlay.querySelector("#pe-apply").addEventListener("click", () => { if (applyToLive()) toast("success", "已在当前会话生效（未写入预设文件）。"); });
     overlay.querySelector("#pe-save").addEventListener("click", saveToPreset);
-    overlay.querySelector("#pe-reload").addEventListener("click", () => { if (loadStateFromLive()) { renderEditor(); toast("info", "已重新载入，未保存的更改被放弃。"); } });
+    overlay.querySelector("#pe-reload").addEventListener("click", () => { if (loadStateFromLive()) { _undo = []; _redo = []; renderEditor(); updateHistButtons(); toast("info", "已重新载入，未保存的更改被放弃。"); } });
+    overlay.querySelector("#pe-undo").addEventListener("click", doUndo);
+    overlay.querySelector("#pe-redo").addEventListener("click", doRedo);
+    overlay.querySelector("#pe-saveas").addEventListener("click", saveAsNewPreset);
     overlay.querySelector("#pe-export").addEventListener("click", exportJson);
     overlay.querySelector("#pe-import").addEventListener("click", () => overlay.querySelector("#pe-import-file").click());
     overlay.querySelector("#pe-import-file").addEventListener("change", importJson);
@@ -796,6 +854,7 @@ function buildRow(p, ord, idx) {
         toggleExpand();
     });
     row.querySelector(".pe-en").addEventListener("change", e => {
+        pushUndo();
         state.order[idx].enabled = e.target.checked;
         row.classList.toggle("pe-disabled", !e.target.checked);
         refreshStats();
@@ -821,6 +880,7 @@ function buildRow(p, ord, idx) {
         const from = parseInt(e.dataTransfer.getData("text/plain"), 10);
         const to = idx;
         if (Number.isNaN(from) || from === to) return;
+        pushUndo();
         const moved = state.order.splice(from, 1)[0];
         state.order.splice(to, 0, moved);
         renderList();
@@ -1029,6 +1089,7 @@ function cssAttr(s) { return String(s).replace(/["\\]/g, "\\$&"); }
 
 // ----- 条目增删改 -----
 function addNewEntry() {
+    pushUndo();
     const id = uuid();
     const p = {
         identifier: id,
@@ -1052,6 +1113,7 @@ function addNewEntry() {
 }
 
 function duplicateEntry(p, idx) {
+    pushUndo();
     const id = uuid();
     const copy = deepClone(p);
     copy.identifier = id;
@@ -1065,6 +1127,7 @@ function duplicateEntry(p, idx) {
 }
 
 function deleteEntry(p, idx) {
+    pushUndo();
     const protectedEntry = isMarker(p) || p.system_prompt;
     state.order.splice(idx, 1);
     if (!protectedEntry) {
