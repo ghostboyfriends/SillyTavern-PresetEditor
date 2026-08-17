@@ -366,13 +366,13 @@ function wiToPrompt(en) {
     };
 }
 
-function benchLoadSource(obj) {
+function benchLoadSource(obj, displayName) {
     // 世界书（World Info）：有 entries、没有 prompts → 转成可缝的条目
     if (obj && obj.entries && !obj.prompts) {
         const raw = obj.entries; const arr = Array.isArray(raw) ? raw : Object.values(raw || {});
         if (!arr.length) { toast("error", "这个世界书里没有条目。"); return; }
         const list = arr.map(en => { const p = wiToPrompt(en); p._sid = uuid(); p._enabled = !en.disable; return p; });
-        state.benchLeft = { name: obj.name || "世界书", list, wi: true };
+        state.benchLeft = { name: displayName || obj.name || "世界书", list, wi: true };
         _benchExpL.clear(); _benchSel.clear(); renderBench(); toast("success", `已载入世界书：${list.length} 条，可拖到右侧缝进当前预设。`); return;
     }
     const prompts = Array.isArray(obj.prompts) ? obj.prompts : (Array.isArray(obj) ? obj : null);
@@ -384,7 +384,7 @@ function benchLoadSource(obj) {
     const list = []; const seen = {};
     order.forEach(o => { if (map[o.identifier]) { const p = deepClone(map[o.identifier]); p._sid = uuid(); p._enabled = o.enabled !== false; list.push(p); seen[o.identifier] = 1; } });
     prompts.forEach(p => { if (p && p.identifier && !seen[p.identifier]) { const c = deepClone(p); c._sid = uuid(); c._enabled = false; list.push(c); } });
-    state.benchLeft = { name: obj.name || "未命名预设", list };
+    state.benchLeft = { name: displayName || obj.name || "未命名预设", list };
     _benchExpL.clear(); _benchSel.clear(); renderBench(); toast("success", `已载入来源：${list.length} 条。`);
 }
 
@@ -418,8 +418,7 @@ function benchLoadFromPreset(name) {
         const idx = list.preset_names ? list.preset_names[name] : undefined;
         const obj = (idx != null && idx >= 0) ? presets[idx] : null;
         if (!obj) { toast("error", "没找到该预设的数据。"); return; }
-        const cloned = deepClone(obj); cloned.name = name;
-        benchLoadSource(cloned);
+        benchLoadSource(obj, name);   // 只读取，不整份深拷贝（避免大预设内存暴涨）
     } catch (e) { console.warn(`[${EXT_ID}] 载入酒馆预设失败`, e); toast("error", "载入酒馆预设失败，详见控制台。"); }
 }
 function benchPresetSelectHtml(id) {
@@ -459,19 +458,19 @@ function renderBench() {
     const presetSel = benchPresetSelectHtml("pe-bench-preset");
     const leftBody = left
         ? (left.list.length ? left.list.map(dwrapLeft).join("") : `<div class="pe-col-empty">这个来源没有条目。</div>`)
-        : `<div class="pe-col-empty">从上方<b>「酒馆预设…」</b>下拉直接选一个预设作为来源，${presetSel ? "" : "（未检测到预设管理器）"}<br>或载入另一个预设 / 一本<b>世界书</b>的 JSON 文件，把里面的条目拖到右侧当前预设。<br><br><button class="pe-btn pe-btn-primary" id="pe-bench-load" style="display:inline-flex">选择 预设 / 世界书 JSON</button></div>`;
+        : `<div class="pe-col-empty">从上方<b>「酒馆预设…」</b>下拉直接选一个预设作为来源，${presetSel ? "" : "（未检测到预设管理器）"}<br>或载入另一个预设 / 一本<b>世界书</b>的 JSON 文件，把里面的条目拖到右侧当前预设。<br><br><button class="pe-btn pe-btn-primary pe-benchload" style="display:inline-flex">选择 预设 / 世界书 JSON</button></div>`;
     const rightBody = state.order.length ? state.order.map((o, i) => dwrapRight(o, i)).join("") : `<div class="pe-col-empty">当前预设暂无条目。</div>`;
     pane.innerHTML = `
       <div class="pe-bench-hint">↔ 拖左侧条目的 ⠿ 手柄放到右侧任意位置即可缝入当前预设；或勾选多条点「缝入所选」。世界书条目会自动转成提示词。缝完记得点底部「保存」写回预设。</div>
       <div class="pe-bench">
-        <div class="pe-col"><div class="pe-col-head"><span class="t">来源（左）${left && left.wi ? " · 📖世界书" : ""}</span><span class="c">${left ? esc(left.name) + " · " + left.list.length + " 条" : "未载入"}</span><span style="flex:1"></span>${presetSel}<button class="pe-mini" id="pe-bench-load" title="导入 预设/世界书 文件">⇪</button></div>
+        <div class="pe-col"><div class="pe-col-head"><span class="t">来源（左）${left && left.wi ? " · 📖世界书" : ""}</span><span class="c">${left ? esc(left.name) + " · " + left.list.length + " 条" : "未载入"}</span><span style="flex:1"></span>${presetSel}<button class="pe-mini pe-benchload" title="导入 预设/世界书 文件">⇪</button></div>
           ${left && left.list.length ? `<div class="pe-bench-tools"><label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--pe-sub);cursor:pointer"><input type="checkbox" class="pe-selcb" id="pe-sel-all" ${_benchSel.size === left.list.length ? "checked" : ""}> 全选</label><span class="n" id="pe-sel-n">已选 ${_benchSel.size}</span><span style="flex:1"></span><button class="pe-btn pe-btn-primary" id="pe-sel-transfer">缝入所选 →</button><button class="pe-btn" id="pe-sel-clear">清空</button></div>` : ""}
           <div class="pe-col-list" id="pe-bench-left">${leftBody}</div></div>
         <div class="pe-col"><div class="pe-col-head"><span class="t">当前预设（右）</span><span class="c">${state.order.length} 条</span></div>
           <div class="pe-col-list" id="pe-bench-right">${rightBody}</div></div>
       </div>`;
     pane.querySelector("#pe-bench-preset")?.addEventListener("change", e => { benchLoadFromPreset(e.target.value); });
-    pane.querySelector("#pe-bench-load")?.addEventListener("click", () => benchFileInput().click());
+    pane.querySelectorAll(".pe-benchload").forEach(b => b.addEventListener("click", () => benchFileInput().click()));
     pane.querySelectorAll("[data-rt]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); pushUndo(); const i = +b.dataset.rt; state.order[i].enabled = !state.order[i].enabled; renderBench(); }));
     pane.querySelectorAll("[data-rd]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); pushUndo(); const i = +b.dataset.rd; const id = state.order[i].identifier; state.order.splice(i, 1); _benchExpR.delete(id); renderBench(); }));
     // 左侧：查看内容
