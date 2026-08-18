@@ -471,7 +471,7 @@
 .pe-dwrap.sel { border-color:var(--pe-accent-border); box-shadow:0 0 0 1px var(--pe-accent-border), inset 0 1px 0 var(--pe-card-hi); }
 .pe-bench-preset { height:30px; max-width:150px; padding:0 8px; border-radius:8px; background:var(--pe-input); color:var(--pe-text); border:1px solid var(--pe-border); font-family:inherit; font-size:12px; cursor:pointer; outline:none; }
 .pe-bench-preset:focus { border-color:var(--pe-accent-border); }
-.pe-dwrap { background:var(--pe-card); border:1px solid var(--pe-border); border-radius:10px; box-shadow:inset 0 1px 0 var(--pe-card-hi); overflow:hidden; }
+.pe-dwrap { flex-shrink:0; background:var(--pe-card); border:1px solid var(--pe-border); border-radius:10px; box-shadow:inset 0 1px 0 var(--pe-card-hi); overflow:hidden; }
 .pe-dwrap.pe-disabled { opacity:.5; }
 .pe-dcard { display:flex; align-items:center; gap:8px; padding:9px 10px; cursor:pointer; }
 .pe-grip { cursor:grab; color:var(--pe-faint); font-size:15px; padding:2px 4px; flex-shrink:0; touch-action:none; }
