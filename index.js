@@ -341,6 +341,8 @@ function fmtNum(n) { return Number(n || 0).toLocaleString("en-US"); }
 const _benchExpL = new Set();
 const _benchExpR = new Set();
 const _benchSel = new Set();
+const BENCH_CAP0 = 80;          // 每栏默认最多渲染多少张卡片（防止超大预设撑爆内存）
+let _benchCapL = BENCH_CAP0, _benchCapR = BENCH_CAP0;
 let _sortBL = null, _sortBR = null, _benchFI = null;
 // 撤销/恢复历史（结构性改动：增删、排序、启停、缝合）
 let _undo = [], _redo = [];
@@ -373,7 +375,7 @@ function benchLoadSource(obj, displayName) {
         if (!arr.length) { toast("error", "这个世界书里没有条目。"); return; }
         const list = arr.map(en => { const p = wiToPrompt(en); p._sid = uuid(); p._enabled = !en.disable; return p; });
         state.benchLeft = { name: displayName || obj.name || "世界书", list, wi: true };
-        _benchExpL.clear(); _benchSel.clear(); renderBench(); toast("success", `已载入世界书：${list.length} 条，可拖到右侧缝进当前预设。`); return;
+        _benchExpL.clear(); _benchSel.clear(); _benchCapL = BENCH_CAP0; renderBench(); toast("success", `已载入世界书：${list.length} 条，可拖到右侧缝进当前预设。`); return;
     }
     const prompts = Array.isArray(obj.prompts) ? obj.prompts : (Array.isArray(obj) ? obj : null);
     if (!prompts) { toast("error", "来源里没找到 prompts 或 entries，请确认是聊天补全预设或世界书。"); return; }
@@ -385,7 +387,7 @@ function benchLoadSource(obj, displayName) {
     order.forEach(o => { if (map[o.identifier]) { const p = deepClone(map[o.identifier]); p._sid = uuid(); p._enabled = o.enabled !== false; list.push(p); seen[o.identifier] = 1; } });
     prompts.forEach(p => { if (p && p.identifier && !seen[p.identifier]) { const c = deepClone(p); c._sid = uuid(); c._enabled = false; list.push(c); } });
     state.benchLeft = { name: displayName || obj.name || "未命名预设", list };
-    _benchExpL.clear(); _benchSel.clear(); renderBench(); toast("success", `已载入来源：${list.length} 条。`);
+    _benchExpL.clear(); _benchSel.clear(); _benchCapL = BENCH_CAP0; renderBench(); toast("success", `已载入来源：${list.length} 条。`);
 }
 
 function benchFileInput() {
@@ -418,6 +420,7 @@ function benchLoadFromPreset(name) {
         const idx = list.preset_names ? list.preset_names[name] : undefined;
         const obj = (idx != null && idx >= 0) ? presets[idx] : null;
         if (!obj) { toast("error", "没找到该预设的数据。"); return; }
+        console.log(`[${EXT_ID}] 从酒馆载入预设「${name}」，条目数≈`, Array.isArray(obj.prompts) ? obj.prompts.length : "?");
         benchLoadSource(obj, name);   // 只读取，不整份深拷贝（避免大预设内存暴涨）
     } catch (e) { console.warn(`[${EXT_ID}] 载入酒馆预设失败`, e); toast("error", "载入酒馆预设失败，详见控制台。"); }
 }
@@ -454,12 +457,18 @@ function dwrapRight(o, i) {
 
 function renderBench() {
     const pane = document.querySelector('.pe-pane[data-pane="bench"]'); if (!pane) return;
+    try {
     const left = state.benchLeft;
     const presetSel = benchPresetSelectHtml("pe-bench-preset");
+    const moreBtn = (shown, total, which) => total > shown ? `<div style="padding:10px;text-align:center"><button class="pe-btn pe-bench-more" data-more="${which}">显示更多（还有 ${total - shown} 条）</button></div>` : "";
+    const leftAll = left ? left.list : [];
+    const leftShown = left ? leftAll.slice(0, _benchCapL) : [];
+    const rightAll = state.order;
+    const rightShown = rightAll.slice(0, _benchCapR);
     const leftBody = left
-        ? (left.list.length ? left.list.map(dwrapLeft).join("") : `<div class="pe-col-empty">这个来源没有条目。</div>`)
+        ? (leftAll.length ? (leftShown.map(dwrapLeft).join("") + moreBtn(leftShown.length, leftAll.length, "L")) : `<div class="pe-col-empty">这个来源没有条目。</div>`)
         : `<div class="pe-col-empty">从上方<b>「酒馆预设…」</b>下拉直接选一个预设作为来源，${presetSel ? "" : "（未检测到预设管理器）"}<br>或载入另一个预设 / 一本<b>世界书</b>的 JSON 文件，把里面的条目拖到右侧当前预设。<br><br><button class="pe-btn pe-btn-primary pe-benchload" style="display:inline-flex">选择 预设 / 世界书 JSON</button></div>`;
-    const rightBody = state.order.length ? state.order.map((o, i) => dwrapRight(o, i)).join("") : `<div class="pe-col-empty">当前预设暂无条目。</div>`;
+    const rightBody = rightAll.length ? (rightShown.map((o, i) => dwrapRight(o, i)).join("") + moreBtn(rightShown.length, rightAll.length, "R")) : `<div class="pe-col-empty">当前预设暂无条目。</div>`;
     pane.innerHTML = `
       <div class="pe-bench-hint">↔ 拖左侧条目的 ⠿ 手柄放到右侧任意位置即可缝入当前预设；或勾选多条点「缝入所选」。世界书条目会自动转成提示词。缝完记得点底部「保存」写回预设。</div>
       <div class="pe-bench">
@@ -471,6 +480,7 @@ function renderBench() {
       </div>`;
     pane.querySelector("#pe-bench-preset")?.addEventListener("change", e => { benchLoadFromPreset(e.target.value); });
     pane.querySelectorAll(".pe-benchload").forEach(b => b.addEventListener("click", () => benchFileInput().click()));
+    pane.querySelectorAll(".pe-bench-more").forEach(b => b.addEventListener("click", () => { if (b.dataset.more === "L") _benchCapL += 200; else _benchCapR += 200; renderBench(); }));
     pane.querySelectorAll("[data-rt]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); pushUndo(); const i = +b.dataset.rt; state.order[i].enabled = !state.order[i].enabled; renderBench(); }));
     pane.querySelectorAll("[data-rd]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); pushUndo(); const i = +b.dataset.rd; const id = state.order[i].identifier; state.order.splice(i, 1); _benchExpR.delete(id); renderBench(); }));
     // 左侧：查看内容
@@ -489,6 +499,10 @@ function renderBench() {
     pane.querySelector("#pe-sel-transfer")?.addEventListener("click", benchTransferSelected);
     pane.querySelector("#pe-bench-preset")?.addEventListener("change", e => { benchLoadFromPreset(e.target.value); });
     initBenchSort();
+    } catch (e) {
+        console.error("[preset-editor] 缝合台渲染出错：", e);
+        toast("error", "缝合台渲染出错（可能预设过大），详见控制台 F12。");
+    }
 }
 
 // 轻量切换左侧多选（只改本卡片 + 计数，不整块重绘，避免"只能单选"的错觉）
