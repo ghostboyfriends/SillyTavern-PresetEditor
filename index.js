@@ -457,6 +457,8 @@ function dwrapRight(o, i) {
 
 function renderBench() {
     const pane = document.querySelector('.pe-pane[data-pane="bench"]'); if (!pane) return;
+    const _sl = pane.querySelector('#pe-bench-left')?.scrollTop || 0;
+    const _sr = pane.querySelector('#pe-bench-right')?.scrollTop || 0;
     try {
     const left = state.benchLeft;
     const presetSel = benchPresetSelectHtml("pe-bench-preset");
@@ -498,6 +500,9 @@ function renderBench() {
     pane.querySelector("#pe-sel-clear")?.addEventListener("click", () => { _benchSel.clear(); renderBench(); });
     pane.querySelector("#pe-sel-transfer")?.addEventListener("click", benchTransferSelected);
     pane.querySelector("#pe-bench-preset")?.addEventListener("change", e => { benchLoadFromPreset(e.target.value); });
+    // 恢复滚动位置，避免每次操作后列表跳回顶部
+    const _L = pane.querySelector('#pe-bench-left'); if (_L) _L.scrollTop = _sl;
+    const _R = pane.querySelector('#pe-bench-right'); if (_R) _R.scrollTop = _sr;
     initBenchSort();
     } catch (e) {
         console.error("[preset-editor] 缝合台渲染出错：", e);
@@ -540,7 +545,7 @@ function initBenchSort() {
     const L = document.getElementById("pe-bench-left"), R = document.getElementById("pe-bench-right");
     if (_sortBL) { try { _sortBL.destroy(); } catch (_) {} _sortBL = null; }
     if (_sortBR) { try { _sortBR.destroy(); } catch (_) {} _sortBR = null; }
-    const common = { handle: ".pe-grip", animation: 150, forceFallback: true, fallbackOnBody: true, fallbackTolerance: 5, scroll: true };
+    const common = { handle: ".pe-grip", animation: 200, easing: "cubic-bezier(0.16, 1, 0.3, 1)", forceFallback: true, fallbackOnBody: true, fallbackTolerance: 3, scroll: true, scrollSensitivity: 90, scrollSpeed: 14, ghostClass: "sortable-ghost", chosenClass: "sortable-chosen", dragClass: "sortable-drag" };
     if (L && state.benchLeft) _sortBL = new S(L, Object.assign({}, common, { group: { name: "peb", pull: "clone", put: false }, sort: false }));
     if (R) _sortBR = new S(R, Object.assign({}, common, { group: { name: "peb", pull: false, put: true }, onAdd: onBenchAdd, onUpdate: onBenchUpdate }));
 }
@@ -548,18 +553,27 @@ function initBenchSort() {
 function onBenchAdd(evt) {
     const sid = evt.item.getAttribute("data-sid"); const at = evt.newIndex;
     if (evt.item.parentNode) evt.item.parentNode.removeChild(evt.item);
-    const src = state.benchLeft && state.benchLeft.list.find(p => p._sid === sid);
-    if (!src) { renderBench(); return; }
+    // 组拖：拖动的是已选中的条目且选了多条 → 一次性把所有所选缝到落点（按来源顺序）
+    let srcs;
+    if (_benchSel.has(sid) && _benchSel.size > 1) srcs = (state.benchLeft?.list || []).filter(p => _benchSel.has(p._sid));
+    else { const one = state.benchLeft?.list.find(p => p._sid === sid); srcs = one ? [one] : []; }
+    if (!srcs.length) { renderBench(); return; }
     pushUndo();
-    let entry = null, skip = false;
-    if (isMarker(src)) {
-        if (findPrompt(src.identifier)) skip = true;
-        else { const c = deepClone(src); delete c._sid; delete c._enabled; delete c._wi; state.prompts.push(c); entry = { identifier: src.identifier, enabled: true }; }
-    } else {
-        const c = deepClone(src); delete c._sid; delete c._enabled; delete c._wi; c.identifier = uuid(); state.prompts.push(c); entry = { identifier: c.identifier, enabled: true };
-    }
-    if (entry) { state.order.splice(Math.max(0, Math.min(at, state.order.length)), 0, entry); toast("success", "已缝入：" + displayName(src)); }
-    else if (skip) { toast("info", "跳过重复占位符：" + displayName(src)); }
+    let insertAt = Math.max(0, Math.min(at, state.order.length)); let n = 0, skip = 0;
+    srcs.forEach(src => {
+        let entry = null;
+        if (isMarker(src)) {
+            if (findPrompt(src.identifier)) { skip++; return; }
+            const c = deepClone(src); delete c._sid; delete c._enabled; delete c._wi; state.prompts.push(c);
+            entry = { identifier: src.identifier, enabled: src._enabled !== false };
+        } else {
+            const c = deepClone(src); delete c._sid; delete c._enabled; delete c._wi; c.identifier = uuid(); state.prompts.push(c);
+            entry = { identifier: c.identifier, enabled: src._enabled !== false };
+        }
+        if (entry) { state.order.splice(insertAt, 0, entry); insertAt++; n++; }
+    });
+    if (srcs.length > 1) _benchSel.clear();
+    toast("success", `已缝入 ${n} 个条目${skip ? `（跳过 ${skip} 个重复占位符）` : ""}。`);
     renderBench();
 }
 function onBenchUpdate(evt) {

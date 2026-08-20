@@ -485,8 +485,10 @@
 .pe-dedit .pe-field textarea { min-height:100px; }
 .pe-col-empty { text-align:center; color:var(--pe-faint); font-size:12px; padding:26px 10px; line-height:1.8; }
 .pe-bench-hint { font-size:12px; color:var(--pe-faint); margin:2px 2px 14px; display:flex; gap:8px; align-items:center; }
-.sortable-ghost { opacity:.4; }
-.sortable-drag { opacity:.95 !important; }
+.sortable-ghost { opacity:.28; }
+.sortable-chosen { }
+.sortable-drag, .sortable-fallback { opacity:.97 !important; box-shadow:0 14px 34px rgba(0,0,0,.4) !important; border-radius:10px; cursor:grabbing; }
+.pe-dwrap { transition:box-shadow .15s ease; }
 @media (max-width:720px){ .pe-bench { flex-direction:column; } .pe-col { width:100%; } }
 
 /* 覆盖浮层（放大编辑）——挂在弹窗内，铺满弹窗 */
