@@ -27,6 +27,7 @@ let _oai = null;            // oai_settings
 let _promptManager = null;  // promptManager 实例
 let _getPresetManager = null;
 let _wiMod = null;
+let _getRequestHeaders = null;
 let _saveSettingsDebounced = null;
 let _extSettings = {};
 let _callGenericPopup = null;
@@ -98,6 +99,12 @@ async function loadDeps() {
         _wiMod = await import("../../../world-info.js");
     } catch (e) {
         console.warn(`[${EXT_ID}] 无法 import world-info.js（世界书缝合的酒馆读写将不可用，仍可用文件导入导出）`, e);
+    }
+    // 请求头（用于直接写世界书到服务器）
+    _getRequestHeaders = ctx?.getRequestHeaders ?? null;
+    if (!_getRequestHeaders) {
+        try { const s = await import("../../../../script.js"); _getRequestHeaders = s.getRequestHeaders ?? null; }
+        catch (e) { console.warn(`[${EXT_ID}] 无法取得 getRequestHeaders`, e); }
     }
 
     // 原生弹窗接口（用它承载 UI，移动端适配/滚动/层级由酒馆官方处理）
@@ -670,13 +677,29 @@ async function wbStLoad(side, name) {
 function wbBuildData() { const entries = {}; state.wbRight.list.forEach((e, i) => { const c = deepClone(e); delete c._sid; c.uid = i; c.displayIndex = i; entries[String(i)] = c; }); const out = { entries }; if (state.wbRight.name) out.name = state.wbRight.name; return out; }
 async function wbStSave() {
     if (!state.wbRight) { toast("info", "右侧没有基底世界书。"); return; }
-    if (!_wiMod || typeof _wiMod.saveWorldInfo !== "function") { toast("info", "未接入酒馆世界书接口，请改用「导出」备份 JSON。"); return; }
     let name = null;
     try { if (typeof _callGenericPopup === "function" && _POPUP_TYPE) name = await _callGenericPopup("存回酒馆世界书，输入名称（同名会覆盖）：", _POPUP_TYPE.INPUT, state.wbRight.name || ""); else name = window.prompt("存回酒馆世界书，输入名称：", state.wbRight.name || ""); }
     catch (_) { name = window.prompt("存回酒馆世界书，输入名称：", state.wbRight.name || ""); }
     if (name == null || name === false) return; name = String(name).trim(); if (!name) { toast("info", "名称不能为空。"); return; }
-    try { await _wiMod.saveWorldInfo(name, wbBuildData(), true); if (_wiMod.updateWorldInfoList) await _wiMod.updateWorldInfoList(); toast("success", `已存回酒馆世界书「${name}」，${state.wbRight.list.length} 条。`); }
-    catch (e) { console.warn(`[${EXT_ID}] 存回世界书失败`, e); toast("error", "存回失败，详见控制台。"); }
+    const data = wbBuildData();
+    try {
+        // 直接 POST 到服务器并检查返回状态（saveWorldInfo 内部不检查响应，会“假成功”）
+        let headers; try { headers = typeof _getRequestHeaders === "function" ? _getRequestHeaders() : { "Content-Type": "application/json" }; } catch (_) { headers = { "Content-Type": "application/json" }; }
+        const resp = await fetch("/api/worldinfo/edit", { method: "POST", headers, body: JSON.stringify({ name, data }) });
+        console.log(`[${EXT_ID}] 存回世界书「${name}」→ HTTP ${resp.status} ${resp.statusText}`);
+        if (!resp.ok) {
+            let extra = ""; try { extra = "：" + (await resp.text()).slice(0, 200); } catch (_) {}
+            toast("error", `存回失败，服务器返回 ${resp.status}${extra}（详见控制台 F12）。`);
+            return;
+        }
+        // 刷新世界书列表 + 通知酒馆编辑器（让它从磁盘重读）
+        try { if (_wiMod?.updateWorldInfoList) await _wiMod.updateWorldInfoList(); } catch (e) { console.warn(`[${EXT_ID}] 刷新世界书列表失败`, e); }
+        try { if (eventSource && event_types?.WORLDINFO_UPDATED) await eventSource.emit(event_types.WORLDINFO_UPDATED, name, data); } catch (_) {}
+        toast("success", `已存回酒馆世界书「${name}」，${state.wbRight.list.length} 条。若列表没刷新，重开一下世界书面板即可看到。`);
+    } catch (e) {
+        console.warn(`[${EXT_ID}] 存回世界书失败`, e);
+        toast("error", "存回失败：" + (e?.message || e) + "（详见控制台 F12）");
+    }
 }
 function wbExport() {
     if (!state.wbRight) { toast("info", "右侧没有基底世界书。"); return; }
