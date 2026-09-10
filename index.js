@@ -771,12 +771,13 @@ function renderWb() {
         const rightBody = R ? (R.list.length ? rShown.map((e, i) => wbCardR(e, i)).join("") + more(rShown.length, R.list.length, "R") : `<div class="pe-col-empty">这本世界书没有条目，可从左侧拖入。</div>`)
             : `<div class="pe-col-empty">选一本<b>基底世界书</b>（合并结果写到这本）。<br><br><button class="pe-btn pe-btn-primary pe-wbload" data-side="R">选择世界书 JSON</button></div>`;
         pane.innerHTML = `
-          <div class="pe-bench-hint">↔ 把左侧世界书条目的 ⠿ 手柄拖到右侧任意位置即可合并；或勾选多条点「合并所选」。完成后「导出」或「存回酒馆」。</div>
+          <div class="pe-bench-hint">↔ 把左侧世界书条目的 ⠿ 手柄拖到右侧任意位置即可合并；或勾选多条点「合并所选」。<b>改完必须点下面的「存回酒馆世界书」</b>——底部的「保存」只管预设，不会保存世界书。</div>
+          ${R ? `<div class="pe-bench-tools" style="border:1px solid var(--pe-border);border-radius:10px;margin-bottom:12px"><span style="font-size:12px;color:var(--pe-sub)">基底世界书「${esc(R.name)}」共 ${R.list.length} 条</span><span style="flex:1"></span><button class="pe-btn" id="wb-export">⤓ 导出为文件</button><button class="pe-btn pe-btn-primary" id="wb-save">💾 存回酒馆世界书</button></div>` : ""}
           <div class="pe-bench">
             <div class="pe-col"><div class="pe-col-head"><span class="t">来源世界书（左）</span><span class="c">${L ? esc(L.name) + " · " + L.list.length + " 条" : "未载入"}</span><span style="flex:1"></span>${stSelL}<button class="pe-mini pe-wbload" data-side="L" title="导入文件">⇪</button></div>
               ${L && L.list.length ? `<div class="pe-bench-tools"><label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--pe-sub);cursor:pointer"><input type="checkbox" class="pe-selcb" id="wb-sel-all" ${_wbSelL.size === L.list.length ? "checked" : ""}> 全选</label><span class="n">已选 ${_wbSelL.size}</span><span style="flex:1"></span><button class="pe-btn pe-btn-primary" id="wb-sel-transfer">合并所选 →</button><button class="pe-btn" id="wb-sel-clear">清空</button></div>` : ""}
               <div class="pe-col-list" id="wb-left-list">${leftBody}</div></div>
-            <div class="pe-col"><div class="pe-col-head"><span class="t">基底世界书（右）</span><span class="c">${R ? esc(R.name) + " · " + R.list.length + " 条" : "未载入"}</span><span style="flex:1"></span>${stSelR}${R ? `<button class="pe-mini pe-wbload" data-side="R" title="导入文件">⇪</button><button class="pe-mini" id="wb-save" title="存回酒馆世界书">💾</button><button class="pe-mini" id="wb-export" title="导出为 JSON 文件">⤓</button>` : ""}</div>
+            <div class="pe-col"><div class="pe-col-head"><span class="t">基底世界书（右）</span><span class="c">${R ? esc(R.name) + " · " + R.list.length + " 条" : "未载入"}</span><span style="flex:1"></span>${stSelR}${R ? `<button class="pe-mini pe-wbload" data-side="R" title="导入文件">⇪</button>` : ""}</div>
               <div class="pe-col-list" id="wb-right-list">${rightBody}</div></div>
           </div>`;
         pane.querySelectorAll(".pe-wbload").forEach(b => b.addEventListener("click", () => wbFileInput(b.dataset.side).click()));
@@ -905,13 +906,18 @@ function openEditor() {
             <button class="pe-btn pe-btn-icon" id="pe-import" title="从 JSON 导入"><i class="fa-solid fa-file-import"></i></button>
             <input type="file" id="pe-import-file" accept="application/json" style="display:none">
           </div>
-          <div class="pe-footer-right">
+          <div class="pe-footer-right" id="pe-footer-preset">
             <button class="pe-btn pe-btn-icon" id="pe-undo" title="撤销（增删/排序/启停/缝合）" disabled><i class="fa-solid fa-rotate-left"></i></button>
             <button class="pe-btn pe-btn-icon" id="pe-redo" title="恢复" disabled><i class="fa-solid fa-rotate-right"></i></button>
             <button class="pe-btn pe-btn-icon" id="pe-reload" title="放弃全部未保存的更改，从预设重新载入"><i class="fa-solid fa-arrows-rotate"></i></button>
             <button class="pe-btn" id="pe-apply" title="仅在当前会话临时生效，不写入预设文件（用于试效果）"><i class="fa-solid fa-bolt"></i> 应用</button>
             <button class="pe-btn" id="pe-saveas" title="把当前内容另存为一个新预设"><i class="fa-solid fa-file-circle-plus"></i> 另存为</button>
             <button class="pe-btn pe-btn-primary" id="pe-save" title="写入当前预设文件并立即生效"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
+          </div>
+          <div class="pe-footer-right pe-hidden" id="pe-footer-wb">
+            <span style="color:var(--pe-faint);font-size:12px;margin-right:4px">世界书缝合</span>
+            <button class="pe-btn" id="pe-wb-export2" title="把右侧基底世界书导出为 JSON 文件"><i class="fa-solid fa-file-export"></i> 导出世界书</button>
+            <button class="pe-btn pe-btn-primary" id="pe-wb-save2" title="把右侧基底世界书写回酒馆（同名覆盖）"><i class="fa-solid fa-floppy-disk"></i> 存回酒馆世界书</button>
           </div>
         </div>`;
 
@@ -935,6 +941,9 @@ function openEditor() {
             if (tab === "preview") renderPreview();
             if (tab === "bench") renderBench();
             if (tab === "wbstitch") renderWb();
+            // 底部按钮跟随标签：世界书缝合页显示世界书的保存/导出，避免误按预设保存
+            const fp = overlay.querySelector("#pe-footer-preset"), fw = overlay.querySelector("#pe-footer-wb");
+            if (fp && fw) { const isWb = tab === "wbstitch"; fp.classList.toggle("pe-hidden", isWb); fw.classList.toggle("pe-hidden", !isWb); }
             if (tab === "tutorial") renderTutorial();
         });
     });
@@ -947,6 +956,8 @@ function openEditor() {
     overlay.querySelector("#pe-undo").addEventListener("click", doUndo);
     overlay.querySelector("#pe-redo").addEventListener("click", doRedo);
     overlay.querySelector("#pe-saveas").addEventListener("click", saveAsNewPreset);
+    overlay.querySelector("#pe-wb-save2")?.addEventListener("click", wbStSave);
+    overlay.querySelector("#pe-wb-export2")?.addEventListener("click", wbExport);
     overlay.querySelector("#pe-export").addEventListener("click", exportJson);
     overlay.querySelector("#pe-import").addEventListener("click", () => overlay.querySelector("#pe-import-file").click());
     overlay.querySelector("#pe-import-file").addEventListener("change", importJson);
