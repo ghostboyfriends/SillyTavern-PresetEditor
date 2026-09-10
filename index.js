@@ -26,6 +26,7 @@ const LABEL = "预设编辑器";
 let _oai = null;            // oai_settings
 let _promptManager = null;  // promptManager 实例
 let _getPresetManager = null;
+let _wiMod = null;
 let _saveSettingsDebounced = null;
 let _extSettings = {};
 let _callGenericPopup = null;
@@ -38,6 +39,7 @@ let state = {
     search: "",
     expanded: new Set(),
     benchLeft: null, // 缝合台左侧来源（预设或世界书）
+    wbLeft: null, wbRight: null, // 世界书缝合：左来源 / 右基底
 };
 
 // 角色显示
@@ -90,6 +92,13 @@ async function loadDeps() {
     }
 
     _saveSettingsDebounced = ctx?.saveSettingsDebounced ?? window.saveSettingsDebounced ?? (() => {});
+
+    // 世界书（world info）——用于「世界书缝合」从酒馆读取/存回
+    try {
+        _wiMod = await import("../../../world-info.js");
+    } catch (e) {
+        console.warn(`[${EXT_ID}] 无法 import world-info.js（世界书缝合的酒馆读写将不可用，仍可用文件导入导出）`, e);
+    }
 
     // 原生弹窗接口（用它承载 UI，移动端适配/滚动/层级由酒馆官方处理）
     _callGenericPopup = ctx?.callGenericPopup ?? null;
@@ -624,6 +633,199 @@ async function saveAsNewPreset() {
     } catch (e) { console.warn(`[${EXT_ID}] 另存为失败`, e); toast("error", "另存为失败，详见控制台。"); }
 }
 
+// ===================== 世界书缝合（合并两本世界书）=====================
+const _wbExpL = new Set(), _wbExpR = new Set(), _wbSelL = new Set();
+let _wsortL = null, _wsortR = null, _wbFIL = null, _wbFIR = null;
+let _wbCapL = BENCH_CAP0, _wbCapR = BENCH_CAP0;
+
+function wbParse(obj) { if (!obj) return null; const raw = obj.entries != null ? obj.entries : (Array.isArray(obj) ? obj : null); if (raw == null) return null; const arr = Array.isArray(raw) ? raw : Object.values(raw); return arr.filter(e => e && typeof e === "object"); }
+function wbName(e) { return e.comment || (Array.isArray(e.key) && e.key.length ? e.key.join(", ") : "") || "(未命名条目)"; }
+function wbKeysStr(e) { return Array.isArray(e.key) ? e.key.join(", ") : (e.key || ""); }
+const WB_POS = { 0: "角色前", 1: "角色后", 2: "作者注前", 3: "作者注后", 4: "@深度", 5: "示例前", 6: "示例后" };
+function wbPosLabel(e) { return e.position === 4 ? ("@深度" + (e.depth != null ? e.depth : 4)) : (WB_POS[e.position] || "角色前"); }
+
+function wbLoad(side, obj) {
+    const list = wbParse(obj); if (!list) { toast("error", "没找到 entries，请确认是世界书 JSON。"); return; }
+    if (!list.length) { toast("error", "这本世界书没有条目。"); return; }
+    const tagged = list.map(e => { const c = deepClone(e); c._sid = uuid(); return c; });
+    const name = obj.name || obj.originalData?.name || (side === "L" ? "世界书A" : "世界书B");
+    if (side === "L") { state.wbLeft = { name, list: tagged }; _wbSelL.clear(); _wbExpL.clear(); _wbCapL = BENCH_CAP0; }
+    else { state.wbRight = { name, list: tagged }; _wbExpR.clear(); _wbCapR = BENCH_CAP0; }
+    renderWb(); toast("success", `已载入${side === "L" ? "左" : "右"}侧世界书：${tagged.length} 条。`);
+}
+function wbFileInput(side) {
+    let ref = side === "L" ? _wbFIL : _wbFIR; if (ref) return ref;
+    const fi = document.createElement("input"); fi.type = "file"; fi.accept = "application/json,.json"; fi.style.display = "none";
+    fi.addEventListener("change", e => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => { try { wbLoad(side, JSON.parse(r.result)); } catch (err) { toast("error", "世界书 JSON 解析失败：" + err.message); } }; r.readAsText(f); e.target.value = ""; });
+    document.body.appendChild(fi); if (side === "L") _wbFIL = fi; else _wbFIR = fi; return fi;
+}
+// 从酒馆读取世界书
+function wbStNames() { try { return (_wiMod && Array.isArray(_wiMod.world_names)) ? _wiMod.world_names.filter(Boolean) : []; } catch (_) { return []; } }
+function wbStSelectHtml(id) { const ns = wbStNames(); if (!ns.length) return ""; return `<select class="pe-bench-preset" id="${id}" title="从酒馆世界书选择"><option value="">酒馆世界书…</option>${ns.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("")}</select>`; }
+async function wbStLoad(side, name) {
+    if (!name) return;
+    try { const data = await _wiMod.loadWorldInfo(name); if (!data) { toast("error", "读取世界书失败。"); return; } const o = deepClone(data); o.name = name; wbLoad(side, o); }
+    catch (e) { console.warn(`[${EXT_ID}] 读取酒馆世界书失败`, e); toast("error", "读取酒馆世界书失败，详见控制台。"); }
+}
+function wbBuildData() { const entries = {}; state.wbRight.list.forEach((e, i) => { const c = deepClone(e); delete c._sid; c.uid = i; c.displayIndex = i; entries[String(i)] = c; }); const out = { entries }; if (state.wbRight.name) out.name = state.wbRight.name; return out; }
+async function wbStSave() {
+    if (!state.wbRight) { toast("info", "右侧没有基底世界书。"); return; }
+    if (!_wiMod || typeof _wiMod.saveWorldInfo !== "function") { toast("info", "未接入酒馆世界书接口，请改用「导出」备份 JSON。"); return; }
+    let name = null;
+    try { if (typeof _callGenericPopup === "function" && _POPUP_TYPE) name = await _callGenericPopup("存回酒馆世界书，输入名称（同名会覆盖）：", _POPUP_TYPE.INPUT, state.wbRight.name || ""); else name = window.prompt("存回酒馆世界书，输入名称：", state.wbRight.name || ""); }
+    catch (_) { name = window.prompt("存回酒馆世界书，输入名称：", state.wbRight.name || ""); }
+    if (name == null || name === false) return; name = String(name).trim(); if (!name) { toast("info", "名称不能为空。"); return; }
+    try { await _wiMod.saveWorldInfo(name, wbBuildData(), true); if (_wiMod.updateWorldInfoList) await _wiMod.updateWorldInfoList(); toast("success", `已存回酒馆世界书「${name}」，${state.wbRight.list.length} 条。`); }
+    catch (e) { console.warn(`[${EXT_ID}] 存回世界书失败`, e); toast("error", "存回失败，详见控制台。"); }
+}
+function wbExport() {
+    if (!state.wbRight) { toast("info", "右侧没有基底世界书。"); return; }
+    const blob = new Blob([JSON.stringify(wbBuildData(), null, 2)], { type: "application/json" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = (state.wbRight.name || "merged-worldbook").replace(/[\\/:*?"<>|]/g, "_") + ".json";
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast("success", `已导出合并世界书：${state.wbRight.list.length} 条。`);
+}
+
+function wbList(side) { return side === "L" ? (state.wbLeft?.list || []) : (state.wbRight?.list || []); }
+function wbFind(side, sid) { return wbList(side).find(e => e._sid === sid); }
+function wbSet(store, sid, key, val) { const e = wbFind(store, sid); if (e) e[key] = val; }
+function wbSetKeys(store, sid, val) { const e = wbFind(store, sid); if (e) e.key = val.split(",").map(s => s.trim()).filter(Boolean); }
+function wbMaxi(store, sid) { const e = wbFind(store, sid); if (e) openMaxiObj(e, "content", "世界书 · " + wbName(e)); }
+
+function wbEditFields(e, store, sid) {
+    const S = `'${store}','${sid}'`; const atDepth = e.position === 4;
+    return `<div class="pe-dedit">
+      <div class="pe-field"><label>标题 / 备注 (comment)</label><input value="${esc(e.comment || "")}" oninput="wbSet(${S},'comment',this.value)"></div>
+      <div class="pe-field"><label>关键词 (逗号分隔)</label><input value="${esc(wbKeysStr(e))}" oninput="wbSetKeys(${S},this.value)"></div>
+      <div class="pe-field-row">
+        <div class="pe-field"><label>位置</label><select onchange="wbSet(${S},'position',parseInt(this.value,10));renderWb()">
+          <option value="0"${e.position === 0 || e.position == null ? " selected" : ""}>角色前</option>
+          <option value="1"${e.position === 1 ? " selected" : ""}>角色后</option>
+          <option value="2"${e.position === 2 ? " selected" : ""}>作者注前</option>
+          <option value="3"${e.position === 3 ? " selected" : ""}>作者注后</option>
+          <option value="4"${e.position === 4 ? " selected" : ""}>@深度</option></select></div>
+        ${atDepth ? `<div class="pe-field"><label>深度</label><input type="number" value="${e.depth ?? 4}" oninput="wbSet(${S},'depth',parseInt(this.value,10)||0)"></div>` : ""}
+        <div class="pe-field"><label>顺序 (order)</label><input type="number" value="${e.order ?? 100}" oninput="wbSet(${S},'order',parseInt(this.value,10)||0)"></div>
+      </div>
+      <div class="pe-field"><label>内容 (content) <button type="button" class="pe-maxi-btn" onclick="wbMaxi(${S})" title="放大编辑">⛶ 放大</button></label><textarea oninput="wbSet(${S},'content',this.value);this.nextElementSibling.textContent=this.value.length+' 字'">${esc(e.content || "")}</textarea><div class="pe-field-foot">${(e.content || "").length} 字</div></div>
+      <label class="pe-check"><input type="checkbox" ${e.constant ? "checked" : ""} onchange="wbSet(${S},'constant',this.checked)"> 常驻（🔵 constant，始终注入）</label>
+    </div>`;
+}
+function wbCardL(e) {
+    const ex = _wbExpL.has(e._sid); const sel = _wbSelL.has(e._sid); const dis = e.disable;
+    return `<div class="pe-dwrap ${sel ? "sel" : ""} ${dis ? "pe-disabled" : ""}" data-wsid="${esc(e._sid)}">
+      <div class="pe-dcard" data-wsell="${esc(e._sid)}">
+        <input type="checkbox" class="pe-selcb" data-wsel="${esc(e._sid)}" ${sel ? "checked" : ""} title="多选">
+        <span class="pe-grip">⠿</span>${e.constant ? '<span class="pe-role pe-bg-user" title="常驻">🔵</span>' : '<span class="pe-dmeta" style="min-width:auto">📖</span>'}
+        <span class="pe-dname">${esc(wbName(e))}</span><span class="pe-dmeta">${esc(wbPosLabel(e))}</span>
+        <button class="pe-mini" data-wexpl="${esc(e._sid)}" title="展开/编辑">${ex ? "▲" : "▼"}</button>
+      </div>${ex ? wbEditFields(e, "L", e._sid) : ""}</div>`;
+}
+function wbCardR(e, i) {
+    const ex = _wbExpR.has(e._sid); const dis = e.disable;
+    return `<div class="pe-dwrap ${dis ? "pe-disabled" : ""}" data-woid="${i}" data-wsid="${esc(e._sid)}">
+      <div class="pe-dcard" data-wexpr="${esc(e._sid)}">
+        <span class="pe-grip">⠿</span>${e.constant ? '<span class="pe-role pe-bg-user" title="常驻">🔵</span>' : '<span class="pe-dmeta" style="min-width:auto">📖</span>'}
+        <span class="pe-dname">${esc(wbName(e))}</span><span class="pe-dmeta">${esc(wbPosLabel(e))}</span>
+        <button class="pe-mini" data-wexprb="${esc(e._sid)}" title="展开/编辑">${ex ? "▲" : "▼"}</button>
+        <button class="pe-mini" data-wren="${i}" title="${dis ? "启用" : "停用"}">${dis ? "○" : "◉"}</button>
+        <button class="pe-mini pe-del" data-wrdel="${i}" title="移除">✕</button>
+      </div>${ex ? wbEditFields(e, "R", e._sid) : ""}</div>`;
+}
+
+function renderWb() {
+    const pane = document.querySelector('.pe-pane[data-pane="wbstitch"]'); if (!pane) return;
+    const _sl = pane.querySelector('#wb-left-list')?.scrollTop || 0;
+    const _sr = pane.querySelector('#wb-right-list')?.scrollTop || 0;
+    try {
+        const L = state.wbLeft, R = state.wbRight;
+        const stSelL = wbStSelectHtml("wb-st-left"), stSelR = wbStSelectHtml("wb-st-right");
+        const more = (shown, total, which) => total > shown ? `<div style="padding:10px;text-align:center"><button class="pe-btn pe-wb-more" data-wmore="${which}">显示更多（还有 ${total - shown} 条）</button></div>` : "";
+        const lShown = L ? L.list.slice(0, _wbCapL) : [], rShown = R ? R.list.slice(0, _wbCapR) : [];
+        const leftBody = L ? (L.list.length ? lShown.map(wbCardL).join("") + more(lShown.length, L.list.length, "L") : `<div class="pe-col-empty">这本世界书没有条目。</div>`)
+            : `<div class="pe-col-empty">选一本<b>来源世界书</b>——上方下拉选酒馆里的，或导入 JSON 文件。<br><br><button class="pe-btn pe-btn-primary pe-wbload" data-side="L">选择世界书 JSON</button></div>`;
+        const rightBody = R ? (R.list.length ? rShown.map((e, i) => wbCardR(e, i)).join("") + more(rShown.length, R.list.length, "R") : `<div class="pe-col-empty">这本世界书没有条目，可从左侧拖入。</div>`)
+            : `<div class="pe-col-empty">选一本<b>基底世界书</b>（合并结果写到这本）。<br><br><button class="pe-btn pe-btn-primary pe-wbload" data-side="R">选择世界书 JSON</button></div>`;
+        pane.innerHTML = `
+          <div class="pe-bench-hint">↔ 把左侧世界书条目的 ⠿ 手柄拖到右侧任意位置即可合并；或勾选多条点「合并所选」。完成后「导出」或「存回酒馆」。</div>
+          <div class="pe-bench">
+            <div class="pe-col"><div class="pe-col-head"><span class="t">来源世界书（左）</span><span class="c">${L ? esc(L.name) + " · " + L.list.length + " 条" : "未载入"}</span><span style="flex:1"></span>${stSelL}<button class="pe-mini pe-wbload" data-side="L" title="导入文件">⇪</button></div>
+              ${L && L.list.length ? `<div class="pe-bench-tools"><label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--pe-sub);cursor:pointer"><input type="checkbox" class="pe-selcb" id="wb-sel-all" ${_wbSelL.size === L.list.length ? "checked" : ""}> 全选</label><span class="n">已选 ${_wbSelL.size}</span><span style="flex:1"></span><button class="pe-btn pe-btn-primary" id="wb-sel-transfer">合并所选 →</button><button class="pe-btn" id="wb-sel-clear">清空</button></div>` : ""}
+              <div class="pe-col-list" id="wb-left-list">${leftBody}</div></div>
+            <div class="pe-col"><div class="pe-col-head"><span class="t">基底世界书（右）</span><span class="c">${R ? esc(R.name) + " · " + R.list.length + " 条" : "未载入"}</span><span style="flex:1"></span>${stSelR}${R ? `<button class="pe-mini pe-wbload" data-side="R" title="导入文件">⇪</button><button class="pe-mini" id="wb-save" title="存回酒馆世界书">💾</button><button class="pe-mini" id="wb-export" title="导出为 JSON 文件">⤓</button>` : ""}</div>
+              <div class="pe-col-list" id="wb-right-list">${rightBody}</div></div>
+          </div>`;
+        pane.querySelectorAll(".pe-wbload").forEach(b => b.addEventListener("click", () => wbFileInput(b.dataset.side).click()));
+        pane.querySelectorAll(".pe-wb-more").forEach(b => b.addEventListener("click", () => { if (b.dataset.wmore === "L") _wbCapL += 200; else _wbCapR += 200; renderWb(); }));
+        pane.querySelector("#wb-st-left")?.addEventListener("change", e => wbStLoad("L", e.target.value));
+        pane.querySelector("#wb-st-right")?.addEventListener("change", e => wbStLoad("R", e.target.value));
+        pane.querySelector("#wb-save")?.addEventListener("click", wbStSave);
+        pane.querySelector("#wb-export")?.addEventListener("click", wbExport);
+        pane.querySelectorAll("[data-wren]").forEach(b => b.addEventListener("click", ev => { ev.stopPropagation(); const i = +b.dataset.wren; const en = state.wbRight.list[i]; en.disable = !en.disable; renderWb(); }));
+        pane.querySelectorAll("[data-wrdel]").forEach(b => b.addEventListener("click", ev => { ev.stopPropagation(); state.wbRight.list.splice(+b.dataset.wrdel, 1); renderWb(); }));
+        const togL = s => { _wbExpL.has(s) ? _wbExpL.delete(s) : _wbExpL.add(s); renderWb(); };
+        const togR = s => { _wbExpR.has(s) ? _wbExpR.delete(s) : _wbExpR.add(s); renderWb(); };
+        pane.querySelectorAll("[data-wexpl]").forEach(b => b.addEventListener("click", ev => { ev.stopPropagation(); togL(b.dataset.wexpl); }));
+        pane.querySelectorAll("[data-wexprb]").forEach(b => b.addEventListener("click", ev => { ev.stopPropagation(); togR(b.dataset.wexprb); }));
+        pane.querySelectorAll("[data-wexpr]").forEach(h => h.addEventListener("click", ev => { if (ev.target.closest(".pe-grip,button,input,select,textarea,label")) return; togR(h.dataset.wexpr); }));
+        const toggleSelL = s => { _wbSelL.has(s) ? _wbSelL.delete(s) : _wbSelL.add(s); const wrap = [...pane.querySelectorAll('#wb-left-list .pe-dwrap[data-wsid]')].find(w => w.dataset.wsid === s); if (wrap) { const on = _wbSelL.has(s); wrap.classList.toggle("sel", on); const cb = wrap.querySelector(".pe-selcb"); if (cb) cb.checked = on; } const all = pane.querySelector("#wb-sel-all"); if (all && state.wbLeft) all.checked = _wbSelL.size === state.wbLeft.list.length; const nn = pane.querySelector(".pe-bench-tools .n"); if (nn) nn.textContent = "已选 " + _wbSelL.size; };
+        pane.querySelectorAll(".pe-selcb[data-wsel]").forEach(cb => cb.addEventListener("change", ev => { ev.stopPropagation(); toggleSelL(cb.dataset.wsel); }));
+        pane.querySelectorAll("[data-wsell]").forEach(h => h.addEventListener("click", ev => { if (ev.target.closest(".pe-grip,button,input,label")) return; toggleSelL(h.dataset.wsell); }));
+        pane.querySelector("#wb-sel-all")?.addEventListener("change", ev => { if (ev.target.checked) state.wbLeft.list.forEach(x => _wbSelL.add(x._sid)); else _wbSelL.clear(); renderWb(); });
+        pane.querySelector("#wb-sel-clear")?.addEventListener("click", () => { _wbSelL.clear(); renderWb(); });
+        pane.querySelector("#wb-sel-transfer")?.addEventListener("click", wbTransferSelected);
+        const _Le = pane.querySelector('#wb-left-list'); if (_Le) _Le.scrollTop = _sl;
+        const _Re = pane.querySelector('#wb-right-list'); if (_Re) _Re.scrollTop = _sr;
+        initWbSort();
+    } catch (e) { console.error(`[${EXT_ID}] 世界书缝合渲染出错：`, e); toast("error", "世界书缝合渲染出错，详见控制台 F12。"); }
+}
+function initWbSort() {
+    const S = globalThis.Sortable; if (!S) return;
+    const L = document.getElementById("wb-left-list"), R = document.getElementById("wb-right-list");
+    if (_wsortL) { try { _wsortL.destroy(); } catch (_) {} _wsortL = null; }
+    if (_wsortR) { try { _wsortR.destroy(); } catch (_) {} _wsortR = null; }
+    const common = { handle: ".pe-grip", animation: 200, easing: "cubic-bezier(0.16, 1, 0.3, 1)", forceFallback: true, fallbackOnBody: true, fallbackTolerance: 3, scroll: true, scrollSensitivity: 90, scrollSpeed: 14, ghostClass: "sortable-ghost", chosenClass: "sortable-chosen", dragClass: "sortable-drag" };
+    if (L && state.wbLeft) _wsortL = new S(L, Object.assign({}, common, { group: { name: "wb", pull: "clone", put: false }, sort: false }));
+    if (R && state.wbRight) _wsortR = new S(R, Object.assign({}, common, { group: { name: "wb", pull: false, put: true }, onAdd: onWbAdd, onUpdate: onWbUpdate }));
+}
+function wbCopyEntry(src) { const c = deepClone(src); delete c._sid; c._sid = uuid(); return c; }
+function onWbAdd(evt) {
+    if (!state.wbRight) { renderWb(); return; }
+    const sid = evt.item.getAttribute("data-wsid"); const at = evt.newIndex;
+    if (evt.item.parentNode) evt.item.parentNode.removeChild(evt.item);
+    let srcs;
+    if (_wbSelL.has(sid) && _wbSelL.size > 1) srcs = (state.wbLeft?.list || []).filter(e => _wbSelL.has(e._sid));
+    else { const one = wbFind("L", sid); srcs = one ? [one] : []; }
+    if (!srcs.length) { renderWb(); return; }
+    let insertAt = Math.max(0, Math.min(at, state.wbRight.list.length));
+    srcs.forEach(src => { state.wbRight.list.splice(insertAt, 0, wbCopyEntry(src)); insertAt++; });
+    if (srcs.length > 1) _wbSelL.clear();
+    toast("success", `已合并 ${srcs.length} 条到基底世界书。`); renderWb();
+}
+function onWbUpdate(evt) { const from = evt.oldIndex, to = evt.newIndex; if (from == null || to == null || from === to) { renderWb(); return; } const [m] = state.wbRight.list.splice(from, 1); state.wbRight.list.splice(to, 0, m); renderWb(); }
+function wbTransferSelected() {
+    if (!state.wbLeft || !state.wbRight) { toast("info", "请先左右各载入一本世界书。"); return; }
+    const chosen = state.wbLeft.list.filter(e => _wbSelL.has(e._sid));
+    if (!chosen.length) { toast("info", "还没勾选任何条目。"); return; }
+    chosen.forEach(src => state.wbRight.list.push(wbCopyEntry(src)));
+    _wbSelL.clear(); renderWb(); toast("success", `已合并 ${chosen.length} 条到基底世界书。`);
+}
+function openMaxiObj(obj, key, title) {
+    const host = document.querySelector(".pe-host") || document.body;
+    const ov = document.createElement("div"); ov.className = "pe-ov"; ov.id = "pe-maxi";
+    ov.innerHTML = `<div class="pe-ov-card"><div class="pe-ov-head"><h3>✎ ${esc(title || "内容")}</h3><span id="pe-maxi-ct" style="font-family:var(--pe-mono);font-size:12px;color:var(--pe-faint)"></span><button class="pe-btn pe-btn-icon" id="pe-maxi-x">✕</button></div><div class="pe-ov-body"><textarea id="pe-maxi-ta" spellcheck="false"></textarea></div><div class="pe-ov-foot"><span style="color:var(--pe-faint);font-size:12px">编辑会实时同步回条目</span><span style="flex:1"></span><button class="pe-btn pe-btn-primary" id="pe-maxi-done">完成</button></div></div>`;
+    host.appendChild(ov);
+    const ta = ov.querySelector("#pe-maxi-ta"); ta.value = obj[key] || "";
+    const ct = ov.querySelector("#pe-maxi-ct"); const upd = () => { ct.textContent = fmtNum(ta.value.length) + " 字"; }; upd();
+    ta.addEventListener("input", () => { obj[key] = ta.value; upd(); });
+    const close = () => { ov.remove(); renderWb(); };
+    ov.querySelector("#pe-maxi-x").addEventListener("click", close);
+    ov.querySelector("#pe-maxi-done").addEventListener("click", close);
+    ov.addEventListener("click", e => { if (e.target === ov) close(); });
+    setTimeout(() => ta.focus(), 30);
+}
+
 function openEditor() {
     if (document.getElementById("pe-modal")) return; // 已打开
     if (typeof _callGenericPopup !== "function" || !_POPUP_TYPE) {
@@ -647,6 +849,7 @@ function openEditor() {
           <div class="pe-tabs">
             <button class="pe-tab pe-active" data-tab="editor">编辑器</button>
             <button class="pe-tab" data-tab="bench">缝合台</button>
+            <button class="pe-tab" data-tab="wbstitch">世界书缝合</button>
             <button class="pe-tab" data-tab="tutorial">教程</button>
             <button class="pe-tab" data-tab="preview">思维链预览</button>
           </div>
@@ -669,6 +872,7 @@ function openEditor() {
         <div class="pe-body">
           <div class="pe-pane" data-pane="editor"></div>
           <div class="pe-pane pe-hidden" data-pane="bench"></div>
+          <div class="pe-pane pe-hidden" data-pane="wbstitch"></div>
           <div class="pe-pane pe-hidden" data-pane="tutorial"></div>
           <div class="pe-pane pe-hidden" data-pane="preview"></div>
         </div>
@@ -707,6 +911,7 @@ function openEditor() {
             overlay.querySelectorAll(".pe-pane").forEach(p => p.classList.toggle("pe-hidden", p.dataset.pane !== tab));
             if (tab === "preview") renderPreview();
             if (tab === "bench") renderBench();
+            if (tab === "wbstitch") renderWb();
             if (tab === "tutorial") renderTutorial();
         });
     });
